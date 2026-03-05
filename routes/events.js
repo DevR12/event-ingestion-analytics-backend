@@ -1,5 +1,6 @@
 const express = require("express");
 const prisma = require("../lib/prisma");
+const pLimit = require("p-limit");
 
 const router = express.Router();
 
@@ -15,7 +16,7 @@ const singlePostBody = zod.object({
 
 const batchPostBody = zod.array(singlePostBody).min(1).max(1000);
 
-// inserting row
+// inserting single event
 router.post("/", async (req, res) => {
     let idempotency_key, event_type, occurred_at, user_id, properties;
 
@@ -30,17 +31,42 @@ router.post("/", async (req, res) => {
 
         ({ event_type, occurred_at, idempotency_key, user_id, properties } = parseResult.data); 
 
-        const event = await prisma.event.create({
-            data: {
-                event_type,
-                user_id,
-                occurred_at: new Date(occurred_at),
-                properties,
-                idempotency_key
-            }
+        const createdEvent = await prisma.$transaction(async (tx) => {
+
+            const event = await tx.event.create({
+                data: {
+                    event_type,
+                    user_id,
+                    occurred_at: new Date(occurred_at),
+                    properties,
+                    idempotency_key
+                }
+            });
+
+            const d = new Date(occurred_at);
+            d.setHours(0,0,0,0);
+
+            await tx.dailyEventCount.upsert({
+                where: {
+                    date_event_type: {
+                        date: d,
+                        event_type: event_type
+                    }
+                },
+                update: {
+                    count: { increment: 1 }
+                },
+                create: {
+                    date: d,
+                    event_type: event_type,
+                    count: 1
+                }
+            });
+
+            return event;
         });
 
-        return res.status(201).json(event);
+        return res.status(201).json(createdEvent);
 
     } catch (error) {
         if (error.code == 'P2002' && error.meta?.target?.includes('idempotency_key')) {
@@ -72,6 +98,7 @@ router.post("/", async (req, res) => {
     }
 });
 
+// inserting batches
 router.post("/batch", async (req, res) => {
     try {
         const parseResult = batchPostBody.safeParse(req.body);
@@ -82,14 +109,6 @@ router.post("/batch", async (req, res) => {
 
         const events = parseResult.data;
 
-        const formattedEvents = events.map( e => ({
-            event_type: e.event_type,
-            user_id: e.user_id,
-            occurred_at: new Date(e.occurred_at),
-            properties: e.properties,
-            idempotency_key: e.idempotency_key
-        }));
-
         const summary = {
             inserted: 0,
             duplicates: 0,
@@ -97,21 +116,48 @@ router.post("/batch", async (req, res) => {
             failed: 0
         }
 
+        const limit = pLimit(10);
+
         await Promise.allSettled(
-            events.map(async (entry) => {
+            events.map(entry => limit(async () => {
                 try {
 
-                    await prisma.event.create({
-                        data: {
-                            event_type: entry.event_type,
-                            user_id: entry.user_id,
-                            occurred_at: new Date(entry.occurred_at),
-                            properties: entry.properties,
-                            idempotency_key: entry.idempotency_key
-                        }
-                    });
+                    await prisma.$transaction(async (tx) => {
+
+                        const createdEvent = await tx.event.create({
+                            data: {
+                                event_type: entry.event_type,
+                                user_id: entry.user_id,
+                                occurred_at: new Date(entry.occurred_at),
+                                properties: entry.properties,
+                                idempotency_key: entry.idempotency_key
+                            }
+                        })
+
+                        const d = new Date(entry.occurred_at);
+                        d.setHours(0, 0, 0, 0);
+
+                        await tx.dailyEventCount.upsert({
+                            where: {
+                                date_event_type: {
+                                    date: d,
+                                    event_type: entry.event_type
+                                }
+                            },
+                            update: {
+                                count: { increment: 1 }
+                            },
+                            create: {
+                                date: d,
+                                event_type: entry.event_type,
+                                count: 1
+                            }
+                        });
+
+                    })
 
                     summary.inserted++;
+
 
                 } catch (error) {
 
@@ -137,7 +183,7 @@ router.post("/batch", async (req, res) => {
                         summary.failed++;
                     }
                 }
-            })
+            }))
         )
 
         return res.status(200).json(summary);

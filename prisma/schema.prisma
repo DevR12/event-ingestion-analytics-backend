@@ -25,3 +25,11 @@ model Event {
   @@index([occurred_at, event_type])
   @@index([user_id, occurred_at])
 }
+
+model DailyEventCount {
+  date DateTime
+  event_type String
+  count Int
+
+  @@id([date, event_type])
+}

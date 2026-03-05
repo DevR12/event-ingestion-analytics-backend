@@ -33,10 +33,10 @@ router.get("/event-count", async (req, res) => {
         }
 
         const result = await prisma.$queryRaw`
-            SELECT event_type, COUNT(*) as count
-            FROM Event
-            WHERE occurred_at >= ${start}
-            AND occurred_at < ${end}
+            SELECT event_type, SUM(count) AS count
+            FROM DailyEventCount
+            WHERE date >= ${start}
+            AND date < ${end}
             GROUP BY event_type`;
         
         const formatted = result.map(row => ({

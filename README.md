@@ -2,7 +2,7 @@
 
 A backend service for ingesting structured event data and running time-window analytics queries.
 
-The system exposes APIs to record events and retrieve aggregated insights such as event counts and user activity. It focuses on reliable event ingestion, correct handling of retries, and efficient querying of time-based data.
+The system exposes APIs to record events and retrieve aggregated insights such as event counts and user activity. It is designed for reliable ingestion, safe retry handling, and efficient analytics on time-based event data.
 
 ---
 
@@ -27,10 +27,12 @@ Request Validation (Zod)
   ↓
 Prisma ORM
   ↓
-MySQL (Event table + indexes)
+MySQL
+  ├── Event (raw events)
+  └── DailyEventCount (aggregated analytics)
 ```
 
-Events are validated at the API layer, stored in MySQL, and later queried through analytics endpoints.
+Events are validated at the API layer, stored in MySQL, and queried through analytics endpoints. Aggregated data is maintained to support fast analytics queries.
 
 ---
 
@@ -58,6 +60,29 @@ Example request:
 }
 ```
 
+Event ingestion is idempotent. Requests with the same `idempotency_key` will not create duplicate events.
+
+---
+
+## Batch Event Ingestion
+
+```
+POST /api/v1/events/batch
+```
+
+Accepts an array of events and processes them in a single request. The endpoint reports how many events were inserted, duplicated, conflicted, or failed.
+
+Example response:
+
+```json
+{
+  "inserted": 98,
+  "duplicates": 1,
+  "conflicts": 0,
+  "failed": 1
+}
+```
+
 ---
 
 ## Event Count by Type
@@ -66,7 +91,7 @@ Example request:
 GET /api/v1/analytics/event-count
 ```
 
-Returns counts of events grouped by type within a time window.
+Returns counts of events grouped by type within a specified time window.
 
 Query parameters:
 
@@ -107,7 +132,9 @@ Example response:
 
 # Database Schema
 
-The system stores events as append-only records.
+## Event Table
+
+Stores raw events as append-only records.
 
 Fields:
 
@@ -130,31 +157,23 @@ These indexes support efficient time-range analytics queries.
 
 ---
 
-# Design Notes
+## DailyEventCount Table
 
-**Idempotent ingestion**
+Stores aggregated daily event counts.
 
-Event writes are protected by a unique constraint on `idempotency_key`.
-If a retry occurs, the existing event is returned instead of inserting a duplicate.
+Fields:
 
-**occurred_at vs received_at**
+* `date`
+* `event_type`
+* `count`
 
-Two timestamps are stored:
-
-* `occurred_at` – when the event happened
-* `received_at` – when the system received it
-
-This allows correct handling of delayed or out-of-order events.
-
-**Time-window querying**
-
-Analytics queries use:
+Composite key:
 
 ```
-occurred_at >= start AND occurred_at < end
+(date, event_type)
 ```
 
-instead of `BETWEEN` to avoid boundary duplication across adjacent windows.
+Analytics endpoints use this table to query aggregated event counts efficiently.
 
 ---
 
@@ -179,3 +198,13 @@ npx prisma migrate dev
 ```
 
 ---
+
+# Seeding Test Data
+
+To generate test data for analytics queries:
+
+```
+node seed.js
+```
+
+The script inserts randomly generated events into the database.
