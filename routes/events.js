@@ -77,14 +77,25 @@ router.post("/batch", async (req, res) => {
         const parseResult = batchPostBody.safeParse(req.body);
 
         if (!parseResult.success) {
-            return res.status(500).json({ error: parseResult.error });
+            return res.status(400).json({ error: parseResult.error });
         }
 
         const events = parseResult.data;
 
-        let inserted = 0;
-        let duplicates = 0;
-        let failed = 0;
+        const formattedEvents = events.map( e => ({
+            event_type: e.event_type,
+            user_id: e.user_id,
+            occurred_at: new Date(e.occurred_at),
+            properties: e.properties,
+            idempotency_key: e.idempotency_key
+        }));
+
+        const summary = {
+            inserted: 0,
+            duplicates: 0,
+            conflicts: 0,
+            failed: 0
+        }
 
         await Promise.allSettled(
             events.map(async (entry) => {
@@ -100,23 +111,36 @@ router.post("/batch", async (req, res) => {
                         }
                     });
 
-                    inserted++;
+                    summary.inserted++;
 
                 } catch (error) {
-                    if (error.code == "P2002") {
-                        duplicates++;
-                    } else {
-                        failed++;
+
+                    if (error.code == 'P2002' && error.meta?.target?.includes('idempotency_key')) {
+                        
+                        const existing = await prisma.event.findUnique({
+                            where: {
+                                idempotency_key: entry.idempotency_key
+                            }
+                        });
+
+                        if (
+                            existing.event_type !== entry.event_type ||
+                            existing.user_id !== entry.user_id ||
+                            new Date(existing.occurred_at).getTime() !== new Date(entry.occurred_at).getTime()
+                        ) {
+                            summary.conflicts++;
+                        } else {
+                            summary.duplicates++;
+                        }
+                    }
+                    else {
+                        summary.failed++;
                     }
                 }
             })
         )
 
-        return res.status(200).json({
-            inserted,
-            duplicates,
-            failed
-        });
+        return res.status(200).json(summary);
 
     } catch (error) {
         console.log(error);
