@@ -20,7 +20,7 @@ router.post("/", async (req, res) => {
     let idempotency_key, event_type, occurred_at, user_id, properties;
 
     try {
-        const parseResult = postBody.safeParse(req.body);
+        const parseResult = singlePostBody.safeParse(req.body);
 
         if (!parseResult.success) {
             return res.status(400).json({
@@ -69,6 +69,58 @@ router.post("/", async (req, res) => {
             console.log(error);
             return res.status(500).json({ error: "Internal Server Error" });
         }
+    }
+});
+
+router.post("/batch", async (req, res) => {
+    try {
+        const parseResult = batchPostBody.safeParse(req.body);
+
+        if (!parseResult.success) {
+            return res.status(500).json({ error: parseResult.error });
+        }
+
+        const events = parseResult.data;
+
+        let inserted = 0;
+        let duplicates = 0;
+        let failed = 0;
+
+        await Promise.allSettled(
+            events.map(async (entry) => {
+                try {
+
+                    await prisma.event.create({
+                        data: {
+                            event_type: entry.event_type,
+                            user_id: entry.user_id,
+                            occurred_at: new Date(entry.occurred_at),
+                            properties: entry.properties,
+                            idempotency_key: entry.idempotency_key
+                        }
+                    });
+
+                    inserted++;
+
+                } catch (error) {
+                    if (error.code == "P2002") {
+                        duplicates++;
+                    } else {
+                        failed++;
+                    }
+                }
+            })
+        )
+
+        return res.status(200).json({
+            inserted,
+            duplicates,
+            failed
+        });
+
+    } catch (error) {
+        console.log(error);
+        return res.status(500).json({ error: "Internal Server Error" });
     }
 });
 

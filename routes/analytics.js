@@ -57,7 +57,7 @@ const typeParams = zod.object({
     start_time: zod.iso.datetime(),
     end_time: zod.iso.datetime(),
     event_type: zod.string(),
-    idempotency_key: z.string().uuid()
+    idempotency_key: zod.uuid()
 });
 
 // each user's count for a particular event_type
