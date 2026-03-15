@@ -204,7 +204,7 @@ npx prisma migrate dev
 To generate test data for analytics queries:
 
 ```
-node seed.js
+node seeding.js
 ```
 
 The script inserts randomly generated events into the database.
